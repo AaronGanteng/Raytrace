@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebGL 2 - Ray Tracing Bola Dasar</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        background-color: #f0f0f0; /* Warna latar halaman */
+      }
+      canvas {
+        border: 1px solid black;
+        display: block; /* Mencegah spasi ekstra di bawah canvas */
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="webgl-canvas" width="500" height="500"></canvas>
+
+    <!-- Library gl-matrix.js via CDN -->
+    <!-- Meskipun demo ini sangat sederhana dan tidak menggunakan banyak fitur gl-matrix, -->
+    <!-- kita sertakan sesuai pedoman untuk praktik terbaik dalam proyek lebih kompleks -->
+    <script src="https://cdn.jsdelivr.net/npm/gl-matrix@3.4.3/gl-matrix-min.js"></script>
+
+    <!-- Vertex Shader (GLSL ES 300) -->
+    <!-- Tugasnya hanya meneruskan posisi vertex quad dan koordinat layar (texCoord) -->
+    <script id="vertex-shader" type="x-shader/x-vertex">
+      #version 300 es
+          // Atribut input: posisi vertex dari quad (-1 hingga 1)
+          in vec2 a_position;
+
+          // Output: koordinat tekstur/layar (0 hingga 1) untuk fragment shader
+          out vec2 v_screenCoord;
+
+          void main() {
+              // Langsung gunakan posisi sebagai output gl_Position
+              // z = 0.0, w = 1.0 -> tidak ada transformasi 3D diperlukan untuk quad ini
+              gl_Position = vec4(a_position, 0.0, 1.0);
+
+              // Ubah posisi (-1 hingga 1) menjadi koordinat layar (0 hingga 1)
+              v_screenCoord = a_position * 0.5 + 0.5;
+          }
+    </script>
+
+    <!-- Fragment Shader (GLSL ES 300) -->
+    <!-- Melakukan perhitungan ray tracing per piksel -->
+    <script id="fragment-shader" type="x-shader/x-fragment">
+      #version 300 es
+          // Presisi default untuk float
+          precision highp float; // Presisi tinggi penting untuk ray tracing
+
+          // Input: koordinat layar (interpolated)
+          in vec2 v_screenCoord;
+
+          // Uniforms: data dari CPU
+          uniform vec2 u_resolution;    // Resolusi canvas (misal: 500, 500)
+          uniform vec3 u_sphereCenter;  // Posisi pusat bola
+          uniform float u_sphereRadius; // Radius bola
+          uniform vec3 u_cameraPos;     // Posisi kamera (asal sinar)
+
+          // Output: warna piksel
+          out vec4 outColor;
+
+          // Fungsi untuk menguji perpotongan sinar dengan bola
+          // Mengembalikan jarak t jika berpotongan, atau nilai negatif jika tidak
+          float intersectSphere(vec3 rayOrigin, vec3 rayDir, vec3 sphereCenter, float sphereRadius) {
+              vec3 oc = rayOrigin - sphereCenter;
+              float a = dot(rayDir, rayDir); // Harus 1.0 jika rayDir dinormalisasi
+              float b = 2.0 * dot(oc, rayDir);
+              float c = dot(oc, oc) - sphereRadius * sphereRadius;
+              float discriminant = b*b - 4.0*a*c;
+
+              if (discriminant < 0.0) {
+                  return -1.0; // Tidak ada perpotongan nyata
+              } else {
+                  // Mengembalikan jarak t ke titik potong terdekat (akar kuadrat terkecil)
+                  // Jika hanya perlu tahu ADA perpotongan, cek discriminant >= 0 sudah cukup
+                  // return (-b - sqrt(discriminant)) / (2.0 * a); // Jarak t
+                   return 1.0; // Cukup kembalikan nilai positif jika ada perpotongan
+              }
+          }
+
+          void main() {
+              // 1. Tentukan Sinar (Ray) untuk piksel ini
+              //    Konversi koordinat layar (0-1) ke Normalized Device Coordinates (-1 hingga 1)
+              vec2 ndc = v_screenCoord * 2.0 - 1.0;
+
+              //    Asumsikan bidang pandang (view plane) ada di z = -1
+              //    Arah sinar dari kamera (u_cameraPos) melalui titik di bidang pandang
+              vec3 rayDir = normalize(vec3(ndc.x * (u_resolution.x / u_resolution.y), ndc.y, -1.0)); // Koreksi aspect ratio sederhana
+              // vec3 rayDir = normalize(vec3(ndc.x, ndc.y, -1.0)); // Jika aspect ratio 1:1
+
+              vec3 rayOrigin = u_cameraPos;
+
+              // 2. Lakukan tes perpotongan sinar dengan bola
+              float intersection = intersectSphere(rayOrigin, rayDir, u_sphereCenter, u_sphereRadius);
+
+              // 3. Tentukan warna output
+              if (intersection >= 0.0) {
+                  // Sinar memotong bola: warna putih
+                  outColor = vec4(1.0, 1.0, 1.0, 1.0);
+              } else {
+                  // Sinar tidak memotong bola: warna biru latar
+                  outColor = vec4(0.2, 0.4, 0.8, 1.0);
+              }
+          }
+    </script>
+
+    <script>
+      "use strict"; // Aktifkan mode strict JavaScript
+
+      function main() {
+        // 1. Dapatkan konteks WebGL2
+        const canvas = document.getElementById("webgl-canvas");
+        const gl = canvas.getContext("webgl2");
+        if (!gl) {
+          console.error("WebGL 2 tidak tersedia di browser Anda.");
+          return;
+        }
+
+        // 2. Kompilasi Shader dan Link Program
+        const vsSource = document.getElementById("vertex-shader").text.trim();
+        const fsSource = document.getElementById("fragment-shader").text.trim();
+        const shaderProgram = initShaderProgram(gl, vsSource, fsSource);
+        if (!shaderProgram) return;
+
+        // 3. Dapatkan lokasi atribut dan uniform
+        const programInfo = {
+          program: shaderProgram,
+          attribLocations: {
+            vertexPosition: gl.getAttribLocation(shaderProgram, "a_position"),
+          },
+          uniformLocations: {
+            resolution: gl.getUniformLocation(shaderProgram, "u_resolution"),
+            sphereCenter: gl.getUniformLocation(
+              shaderProgram,
+              "u_sphereCenter"
+            ),
+            sphereRadius: gl.getUniformLocation(
+              shaderProgram,
+              "u_sphereRadius"
+            ),
+            cameraPos: gl.getUniformLocation(shaderProgram, "u_cameraPos"),
+          },
+        };
+
+        // 4. Siapkan Buffer untuk Quad Layar Penuh
+        const positionBuffer = initPositionBuffer(gl);
+
+        // 5. Fungsi Render
+        function render() {
+          // Atur ukuran viewport sesuai ukuran canvas (hanya perlu sekali karena fixed size)
+          gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+          // Bersihkan layar dengan warna hitam (meskipun akan ditimpa fragment shader)
+          gl.clearColor(0.0, 0.0, 0.0, 1.0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+
+          // Gunakan program shader
+          gl.useProgram(programInfo.program);
+
+          // Hubungkan buffer posisi ke atribut a_position
+          {
+            const numComponents = 2; // x, y
+            const type = gl.FLOAT;
+            const normalize = false;
+            const stride = 0;
+            const offset = 0;
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.vertexAttribPointer(
+              programInfo.attribLocations.vertexPosition,
+              numComponents,
+              type,
+              normalize,
+              stride,
+              offset
+            );
+            gl.enableVertexAttribArray(
+              programInfo.attribLocations.vertexPosition
+            );
+          }
+
+          // Atur uniform untuk fragment shader
+          gl.uniform2f(
+            programInfo.uniformLocations.resolution,
+            gl.canvas.width,
+            gl.canvas.height
+          );
+          gl.uniform3f(
+            programInfo.uniformLocations.sphereCenter,
+            0.0,
+            0.0,
+            -3.0
+          ); // Pusatkan bola agak ke dalam layar
+          gl.uniform1f(programInfo.uniformLocations.sphereRadius, 1.0); // Radius bola
+          gl.uniform3f(programInfo.uniformLocations.cameraPos, 0.0, 0.0, 0.0); // Kamera di origin
+
+          // Gambar quad (2 segitiga membentuk persegi)
+          {
+            const offset = 0;
+            const vertexCount = 4; // 4 vertex untuk TRIANGLE_STRIP
+            gl.drawArrays(gl.TRIANGLE_STRIP, offset, vertexCount);
+          }
+        }
+
+        // Panggil render sekali (karena scene statis)
+        render();
+      }
+
+      // --- Fungsi Helper ---
+
+      // Inisialisasi buffer posisi untuk quad layar penuh (-1 hingga 1)
+      function initPositionBuffer(gl) {
+        const positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+
+        // Posisi untuk quad menggunakan TRIANGLE_STRIP
+        // Urutan: Kiri Atas, Kiri Bawah, Kanan Atas, Kanan Bawah
+        const positions = [
+          -1.0,
+          1.0, // Kiri Atas
+          -1.0,
+          -1.0, // Kiri Bawah
+          1.0,
+          1.0, // Kanan Atas
+          1.0,
+          -1.0, // Kanan Bawah
+        ];
+
+        gl.bufferData(
+          gl.ARRAY_BUFFER,
+          new Float32Array(positions),
+          gl.STATIC_DRAW
+        );
+        return positionBuffer;
+      }
+
+      // Inisialisasi program shader
+      function initShaderProgram(gl, vsSource, fsSource) {
+        const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+        const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+        if (!vertexShader || !fragmentShader) return null;
+
+        const shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+          console.error(
+            "Gagal me-link program shader: " +
+              gl.getProgramInfoLog(shaderProgram)
+          );
+          gl.deleteProgram(shaderProgram);
+          gl.deleteShader(vertexShader);
+          gl.deleteShader(fragmentShader);
+          return null;
+        }
+        return shaderProgram;
+      }
+
+      // Membuat dan mengkompilasi shader
+      function loadShader(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          console.error(
+            "Gagal mengkompilasi shader (" +
+              (type === gl.VERTEX_SHADER ? "vertex" : "fragment") +
+              "): " +
+              gl.getShaderInfoLog(shader)
+          );
+          gl.deleteShader(shader);
+          return null;
+        }
+        return shader;
+      }
+
+      // Jalankan main setelah halaman dimuat
+      window.onload = main;
+    </script>
+  </body>
+</html>
